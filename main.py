@@ -496,9 +496,7 @@ async def handle_callback(update: Update, context: CallbackContext) -> None:
 
 def main():
     PORT = int(os.environ.get("PORT", 8443))
-    TOKEN = os.environ.get("BOT_TOKEN", TOKEN)  # Render environment variable'dan token olish
-    
-    application = Application.builder().token(TOKEN).build()
+    application = Application.builder().token(TOKEN).read_timeout(100).write_timeout(100).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
@@ -511,9 +509,10 @@ def main():
         listen="0.0.0.0",
         port=PORT,
         url_path=TOKEN,
-        webhook_url=f"https://{os.environ.get('RENDER_EXTERNAL_URL')}/{TOKEN}"
+        webhook_url=f"https://{os.environ.get('https://instasave-1-cbdc.onrender.com')}/{TOKEN}"
     )
 
 
 if __name__ == '__main__':
     main()
+
