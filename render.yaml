@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: instasave-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      BOT_TOKEN: "7847208260:AAG4XeEcE1RLixadm3YZGKvC2fqv4_NvFuc"
