@@ -8,14 +8,8 @@ import shutil
 from telegram import Update, InputMediaVideo, InputMediaPhoto
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from flask import Flask, request, abort
-import logging
 
-# Environment variables
-TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', "7847208260:AAG4XeEcE1RLixadm3YZGKvC2fqv4_NvFuc")  # Fallback, production'da env ishlat
-if not TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN environment variable kerak!")
-WEBHOOK_URL = os.environ.get('WEBHOOK_URL', 'https://your-app.onrender.com/webhook')  # Render da o'zgartiring
+TOKEN = '7847208260:AAG4XeEcE1RLixadm3YZGKvC2fqv4_NvFuc'
 
 # YouTube related variables and functions
 FORMAT_EMOJIS = {
@@ -26,15 +20,11 @@ FORMAT_EMOJIS = {
 MAX_FILE_SIZE = 30 * 1024 * 1024  # 30MB limit
 DOWNLOAD_TIMEOUT = 300  # 5 daqiqa
 
-# Downloads papkasini yaratish
+# downloads papkasini yaratish
 downloads_dir = os.path.join(os.getcwd(), "downloads")
 os.makedirs(downloads_dir, exist_ok=True)
 
 user_data = {}
-
-# Logging sozlash
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 async def clean_downloads_folder():
     """Downloads papkasidagi barcha fayllarni tozalash"""
@@ -47,9 +37,9 @@ async def clean_downloads_folder():
                 elif os.path.isdir(file_path):
                     shutil.rmtree(file_path)
             except Exception as e:
-                logger.error(f"Faylni o'chirishda xatolik {file_path}: {e}")
+                print(f"Faylni o'chirishda xatolik {file_path}: {e}")
     except Exception as e:
-        logger.error(f"Downloads papkasini tozalashda xatolik: {e}")
+        print(f"Downloads papkasini tozalashda xatolik: {e}")
 
 async def progress_hook(d, chat_id, message_id, bot):
     try:
@@ -66,7 +56,7 @@ async def progress_hook(d, chat_id, message_id, bot):
                 message_id=message_id
             )
     except Exception as e:
-        logger.error(f"Progress xatosi: {e}")
+        print(f"Progress xatosi: {e}")
 
 def get_available_formats(info):
     formats = {'video': {}, 'audio': {}}
@@ -75,10 +65,11 @@ def get_available_formats(info):
         if not isinstance(f, dict):
             continue
             
-        # Video formatlari
+        # Video formatlari (faqat 50MB dan kichik va filesize mavjud bo'lganlar)
         if f.get('vcodec') != 'none' and f.get('ext') == 'mp4':
             height = f.get('height')
             filesize = f.get('filesize', 0)
+            # Faqat filesize mavjud va 50MB dan kichik bo'lgan formatlar
             if height and filesize and filesize <= MAX_FILE_SIZE:
                 height_str = str(height)
                 if height_str not in formats['video'] or filesize > formats['video'][height_str].get('filesize', 0):
@@ -88,7 +79,7 @@ def get_available_formats(info):
                         'url': f.get('url')
                     }
         
-        # Audio formatlari
+        # Audio formatlari (faqat 50MB dan kichik va filesize mavjud bo'lganlar)
         elif f.get('acodec') != 'none' and f.get('vcodec') == 'none':
             ext = f.get('ext')
             filesize = f.get('filesize', 0)
@@ -106,7 +97,7 @@ async def send_format_buttons(chat_id, info, bot):
     formats = user_data[chat_id]["formats"]
     buttons = []
     
-    # Video tugmalari
+    # Video formatlari uchun tugmalar (faqat filesize mavjud va 50MB dan kichiklar)
     for height, f in sorted(formats['video'].items(), key=lambda x: int(x[0])):
         size = f.get('filesize', 0) / (1024 * 1024)
         buttons.append(InlineKeyboardButton(
@@ -114,7 +105,7 @@ async def send_format_buttons(chat_id, info, bot):
             callback_data=f"video_{f['format_id']}"
         ))
     
-    # Audio tugmalari
+    # Audio formatlari uchun tugmalar (faqat filesize mavjud va 50MB dan kichiklar)
     for ext, f in formats['audio'].items():
         size = f.get('filesize', 0) / (1024 * 1024)
         buttons.append(InlineKeyboardButton(
@@ -123,10 +114,10 @@ async def send_format_buttons(chat_id, info, bot):
         ))
     
     if not buttons:
-        await bot.send_message(chat_id, "❌ Ushbu videoda yuklab olinadigan formatlar topilmadi (faqat 30MB dan kichik va hajmi ma'lum formatlar ko'rsatiladi).")
+        await bot.send_message(chat_id, "❌ Ushbu videoda yuklab olinadigan formatlar topilmadi (faqat 50MB dan kichik va hajmi ma'lum formatlar ko'rsatiladi).")
         return
     
-    # Tugmalarni qatorlarga ajratish
+    # Tugmalarni qatorlarga ajratish (har bir qatorda 2 ta tugma)
     keyboard = []
     for i in range(0, len(buttons), 2):
         row = buttons[i:i+2]
@@ -134,9 +125,10 @@ async def send_format_buttons(chat_id, info, bot):
     
     markup = InlineKeyboardMarkup(keyboard)
     
-    caption = f"🎬 <b>{info.get('title', 'Video')}</b>\n\nQuyidagi formatlardan birini tanlang (faqat 30MB dan kichik va hajmi ma'lum formatlar ko'rsatiladi):"
+    caption = f"🎬 <b>{info.get('title', 'Video')}</b>\n\nQuyidagi formatlardan birini tanlang (faqat 50MB dan kichik va hajmi ma'lum formatlar ko'rsatiladi):"
     
     try:
+        # Video rasmini yoki standart xabar yuborish
         thumbnail = info.get('thumbnail')
         if thumbnail:
             msg = await bot.send_photo(
@@ -151,7 +143,7 @@ async def send_format_buttons(chat_id, info, bot):
                 parse_mode='HTML',
                 reply_markup=markup
             )
-        
+            
         user_data[chat_id]["format_message_id"] = msg.message_id
         
     except Exception as e:
@@ -159,6 +151,7 @@ async def send_format_buttons(chat_id, info, bot):
 
 async def download_media(chat_id, format_id, is_video=True, bot=None):
     try:
+        # Avval downloads papkasini tozalaymiz
         await clean_downloads_folder()
         
         result = await asyncio.wait_for(_download_media(chat_id, format_id, is_video, bot), timeout=DOWNLOAD_TIMEOUT)
@@ -174,6 +167,7 @@ async def _download_media(chat_id, format_id, is_video, bot):
     url = user_data[chat_id]["url"]
     ext = "mp4" if is_video else "mp3"
     
+    # Unique fayl nomi yaratish
     timestamp = int(time.time())
     filename = os.path.join(downloads_dir, f"{chat_id}_{timestamp}.{ext}")
     
@@ -220,7 +214,9 @@ async def _download_media(chat_id, format_id, is_video, bot):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
+        # Audio fayllar uchun qo'shimcha tekshirish
         if not is_video:
+            # Agar .mp3.mp3 yaratilgan bo'lsa, uni to'g'irlaymiz
             double_ext = f"{filename}.mp3"
             if os.path.exists(double_ext):
                 os.rename(double_ext, filename)
@@ -231,7 +227,7 @@ async def _download_media(chat_id, format_id, is_video, bot):
         file_size = os.path.getsize(filename)
         if file_size > MAX_FILE_SIZE:
             os.remove(filename)
-            raise Exception("Fayl hajmi 30MB dan katta")
+            raise Exception("Fayl hajmi 50MB dan katta")
         
         return filename, progress_messages['message_id']
     
@@ -241,12 +237,13 @@ async def _download_media(chat_id, format_id, is_video, bot):
             chat_id=chat_id,
             message_id=loading_msg.message_id
         )
+        # Har qanday fayllarni o'chiramiz
         for f in [filename, f"{filename}.mp3"]:
             if os.path.exists(f):
                 os.remove(f)
         return None
 
-# Instagram functions
+# Instagram related functions
 async def download_instagram_media(shortcode):
     L = instaloader.Instaloader()
     post = instaloader.Post.from_shortcode(L.context, shortcode)
@@ -264,6 +261,7 @@ async def download_instagram_media(shortcode):
                         for chunk in r.iter_content(chunk_size=1024*1024):
                             if chunk:
                                 f.write(chunk)
+                # Fayl hajmini tekshiramiz
                 if os.path.exists(filename) and os.path.getsize(filename) <= MAX_FILE_SIZE:
                     media_files.append(('video', filename))
                 else:
@@ -273,6 +271,7 @@ async def download_instagram_media(shortcode):
                 filename = os.path.join(downloads_dir, f"image_{index}.jpg")
                 with open(filename, 'wb') as f:
                     f.write(requests.get(node.display_url, timeout=60).content)
+                # Fayl hajmini tekshiramiz
                 if os.path.exists(filename) and os.path.getsize(filename) <= MAX_FILE_SIZE:
                     media_files.append(('image', filename))
                 else:
@@ -286,6 +285,7 @@ async def download_instagram_media(shortcode):
                 for chunk in r.iter_content(chunk_size=1024*1024):
                     if chunk:
                         f.write(chunk)
+        # Fayl hajmini tekshiramiz
         if os.path.exists(filename) and os.path.getsize(filename) <= MAX_FILE_SIZE:
             media_files.append(('video', filename))
         else:
@@ -296,6 +296,7 @@ async def download_instagram_media(shortcode):
         filename = os.path.join(downloads_dir, "image.jpg")
         with open(filename, 'wb') as f:
             f.write(requests.get(post.url, timeout=60).content)
+        # Fayl hajmini tekshiramiz
         if os.path.exists(filename) and os.path.getsize(filename) <= MAX_FILE_SIZE:
             media_files.append(('image', filename))
         else:
@@ -309,7 +310,7 @@ async def start(update: Update, context: CallbackContext) -> None:
     await update.message.reply_text(
         "📸 *Media Yuklovchi Bot* 📹\n\n"
         "YouTube yoki Instagramdagi videolar va rasmlarni yuklab olish uchun linkini yuboring.\n"
-        "⚠️ Eslatma: Faqat 30MB dan kichik fayllar yuklanadi.\n\n"
+        "⚠️ Eslatma: Faqat 50MB dan kichik fayllar yuklanadi.\n\n"
         "🌐 *Namunalar:*\n"
         "YouTube: `https://www.youtube.com/watch?v=dQw4w9WgXcQ`\n"
         "Instagram: `https://www.instagram.com/p/Cz6ZQKjN3qP/`\n\n"
@@ -325,6 +326,7 @@ async def handle_youtube_link(update: Update, context: CallbackContext):
         url = 'https://' + url
     
     try:
+        # Avval downloads papkasini tozalaymiz
         await clean_downloads_folder()
         
         loading_msg = await context.bot.send_message(chat_id, "🔍 Video ma'lumotlari olinmoqda...")
@@ -357,6 +359,7 @@ async def handle_youtube_link(update: Update, context: CallbackContext):
 
 async def handle_instagram_link(update: Update, context: CallbackContext):
     try:
+        # Avval downloads papkasini tozalaymiz
         await clean_downloads_folder()
         
         loading_msg = await update.message.reply_text("⏳ Media yuklanmoqda...")
@@ -365,7 +368,7 @@ async def handle_instagram_link(update: Update, context: CallbackContext):
         media_files = await download_instagram_media(shortcode)
         
         if not media_files:
-            await loading_msg.edit_text("❌ Ushbu postda media topilmadi yoki fayl hajmi 30MB dan katta.")
+            await loading_msg.edit_text("❌ Ushbu postda media topilmadi yoki fayl hajmi 50MB dan katta.")
             return
         
         await loading_msg.delete()
@@ -379,6 +382,7 @@ async def handle_instagram_link(update: Update, context: CallbackContext):
             else:
                 await update.message.reply_photo(photo=open(filename, 'rb'), caption=caption)
             
+            # Faylni o'chiramiz
             try:
                 os.remove(filename)
             except:
@@ -396,6 +400,7 @@ async def handle_instagram_link(update: Update, context: CallbackContext):
                     media_group.append(InputMediaPhoto(media=open(filename, 'rb'), 
                                                 caption=caption if i == len(media_files)-1 else None))
                 
+                # Faylni o'chiramiz
                 try:
                     os.remove(filename)
                 except:
@@ -469,69 +474,46 @@ async def handle_callback(update: Update, context: CallbackContext) -> None:
             await context.bot.send_message(chat_id, f"❌ Media yuborishda xatolik: {str(e)}")
             raise
         
+        # Progress xabarini o'chiramiz
         try:
             await context.bot.delete_message(chat_id, progress_msg_id)
         except:
             pass
         
+        # Faylni o'chiramiz
         try:
             if os.path.exists(file_path):
                 os.remove(file_path)
         except:
             pass
-        
+            
+        # Downloads papkasini tozalaymiz
         await clean_downloads_folder()
             
     except Exception as e:
         error_msg = f"❌ Yuklashda xatolik: {str(e)}"
         await context.bot.send_message(chat_id, error_msg)
 
-# Flask app
-app = Flask(__name__)
+def main():
+    PORT = int(os.environ.get("PORT", 8443))
+    TOKEN = os.environ.get("BOT_TOKEN", TOKEN)  # Render environment variable'dan token olish
+    
+    application = Application.builder().token(TOKEN).build()
 
-# Bot application (o'zgartirilgan: updater=None)
-application = (
-    Application.builder()
-    .token(TOKEN)
-    .updater(None)  # Polling o'chirish
-    .build()
-)
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(CallbackQueryHandler(handle_callback))
 
-# Handler'lar
-application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-application.add_handler(CallbackQueryHandler(handle_callback))
+    print("✅ Bot server ishga tushdi...")
 
-# Webhook endpoint (async, v22 uchun)
-@app.route('/webhook', methods=['POST'])
-async def webhook():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_json()
-        update = Update.de_json(json_string, application.bot)
-        await application.update_queue.put(update)
-        return 'ok'
-    else:
-        abort(403)
+    # Webhook server sifatida ishga tushirish
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TOKEN,
+        webhook_url=f"https://{os.environ.get('RENDER_EXTERNAL_URL')}/{TOKEN}"
+    )
 
-@app.route('/')
-def index():
-    return "Bot ishlamoqda! Webhook URL: " + WEBHOOK_URL
-
-# Async main
-async def main():
-    await application.bot.set_webhook(WEBHOOK_URL)
-    logger.info(f"Webhook sozlandi: {WEBHOOK_URL}")
-    # Application'ni ishga tushirish (webhook uchun)
-    async with application:
-        await application.initialize()
-        await application.start()
-        await application.updater.start_webhook(
-            listen="0.0.0.0",
-            port=int(os.environ.get('PORT', 5000)),
-            url_path="/webhook",
-            webhook_url=WEBHOOK_URL
-        )
-        logger.info("Bot ishga tushdi!")
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
