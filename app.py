@@ -12,7 +12,7 @@ from flask import Flask, request, abort
 import logging
 
 # Environment variables
-TOKEN = os.environ.get('7847208260:AAG4XeEcE1RLixadm3YZGKvC2fqv4_NvFuc')
+TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', "7847208260:AAG4XeEcE1RLixadm3YZGKvC2fqv4_NvFuc")
 if not TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN environment variable kerak!")
 
@@ -540,4 +540,5 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     init_webhook()
     app.run(host='0.0.0.0', port=port, debug=False)
+
 
