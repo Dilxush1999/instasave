@@ -496,23 +496,24 @@ async def handle_callback(update: Update, context: CallbackContext) -> None:
 
 def main():
     PORT = int(os.environ.get("PORT", 8443))
-    application = Application.builder().token(TOKEN).read_timeout(100).write_timeout(100).build()
+    APP_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://instasave-1-cbdc.onrender.com")
 
+    application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(handle_callback))
 
     print("✅ Bot server ishga tushdi...")
 
-    # Webhook server sifatida ishga tushirish
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path=TOKEN,
-        webhook_url=f"https://{os.environ.get('https://instasave-1-cbdc.onrender.com')}/{TOKEN}"
+        webhook_url=f"{APP_URL}/{TOKEN}"
     )
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
+
+
 
