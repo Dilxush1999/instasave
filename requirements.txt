@@ -1,0 +1,6 @@
+Flask==3.0.3
+python-telegram-bot==20.7
+instaloader==4.12.2
+yt-dlp==2024.10.7
+requests==2.31.0
+gunicorn==22.0.0  # Production server uchun
