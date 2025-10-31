@@ -1,6 +1,6 @@
-python-telegram-bot[webhooks]==20.8
-yt-dlp
-instaloader
+python-telegram-bot==20.8
+yt-dlp==2024.10.22
+instaloader==4.13
 requests
 
 
