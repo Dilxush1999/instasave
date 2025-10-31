@@ -1,11 +1,3 @@
-# app.py - Render.com uchun moslashtirilgan versiya
-# Asosiy o'zgarishlar:
-# - Polling o'rniga webhook ishlatiladi (Telegram bot webhook'ini sozlash kerak).
-# - Flask veb-server sifatida ishlatiladi (Render.com uchun mos).
-# - TOKEN environment variable'dan olinadi (xavfsizlik uchun).
-# - Port va host Render uchun sozlanadi.
-# - Doimiy ishlaydigan server uchun gunicorn ishlatish mumkin (requirements.txt da).
-
 import os
 import requests
 import instaloader
@@ -20,7 +12,7 @@ from flask import Flask, request, abort
 import logging
 
 # Environment variables
-TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN')
+TOKEN = os.environ.get('7847208260:AAG4XeEcE1RLixadm3YZGKvC2fqv4_NvFuc')
 if not TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN environment variable kerak!")
 
@@ -548,3 +540,4 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     init_webhook()
     app.run(host='0.0.0.0', port=port, debug=False)
+
