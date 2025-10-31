@@ -497,9 +497,9 @@ async def handle_callback(update: Update, context: CallbackContext) -> None:
 def main():
     TOKEN = "7847208260:AAG4XeEcE1RLixadm3YZGKvC2fqv4_NvFuc"
     PORT = int(os.environ.get("PORT", 8443))
-    APP_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://instasave.onrender.com")
+    APP_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://instasave-1-cbdc.onrender.com")
 
-    application = Application.builder().token(TOKEN).build()
+    application = Application.builder().token(TOKEN).read_timeout(100).write_timeout(100).build()
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(handle_callback))
@@ -516,6 +516,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
