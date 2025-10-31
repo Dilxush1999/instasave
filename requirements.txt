@@ -2,6 +2,6 @@ python-telegram-bot==20.8
 yt-dlp
 instaloader
 requests
-asyncio
+
 
 
