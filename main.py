@@ -495,8 +495,9 @@ async def handle_callback(update: Update, context: CallbackContext) -> None:
         await context.bot.send_message(chat_id, error_msg)
 
 def main():
+    TOKEN = "7847208260:AAG4XeEcE1RLixadm3YZGKvC2fqv4_NvFuc"
     PORT = int(os.environ.get("PORT", 8443))
-    APP_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://instasave-1-cbdc.onrender.com")
+    APP_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://instasave.onrender.com")
 
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
@@ -505,6 +506,7 @@ def main():
 
     print("✅ Bot server ishga tushdi...")
 
+    # Render uchun webhook usuli
     application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
@@ -514,6 +516,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
