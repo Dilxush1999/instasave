@@ -1,523 +1,373 @@
 import os
-import requests
-import instaloader
-import yt_dlp
+import re
+import json
 import time
 import asyncio
 import shutil
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import unquote
+
+import yt_dlp
 from telegram import Update, InputMediaVideo, InputMediaPhoto
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, CallbackQueryHandler
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, filters,
+    CallbackContext, CallbackQueryHandler
+)
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-TOKEN = '7847208260:AAG4XeEcE1RLixadm3YZGKvC2fqv4_NvFuc'
+# === TOKEN ===
+TOKEN = os.environ.get("BOT_TOKEN", "7847208260:AAG4XeEcE1RLixadm3YZGKvC2fqv4_NvFuc")
 
-# YouTube related variables and functions
-FORMAT_EMOJIS = {
-    '144': '📱', '360': '📺', '480': '🎬',
-    '720': '📹', '1080': '🎥', 'mp3': '🎵', 'aac': '🎵'
-}
+# === YouTube ===
+FORMAT_EMOJIS = {'144': 'Mobile', '360': 'TV', '480': 'Film', '720': 'HD', '1080': 'Full HD', 'mp3': 'Music'}
+MAX_FILE_SIZE = 30 * 1024 * 1024
+DOWNLOAD_TIMEOUT = 300
 
-MAX_FILE_SIZE = 30 * 1024 * 1024  # 30MB limit
-DOWNLOAD_TIMEOUT = 300  # 5 daqiqa
-
-# downloads papkasini yaratish
+# === Papkalar ===
 downloads_dir = os.path.join(os.getcwd(), "downloads")
 os.makedirs(downloads_dir, exist_ok=True)
-
 user_data = {}
 
+# === Tozalash ===
 async def clean_downloads_folder():
-    """Downloads papkasidagi barcha fayllarni tozalash"""
     try:
-        for filename in os.listdir(downloads_dir):
-            file_path = os.path.join(downloads_dir, filename)
-            try:
-                if os.path.isfile(file_path) or os.path.islink(file_path):
-                    os.unlink(file_path)
-                elif os.path.isdir(file_path):
-                    shutil.rmtree(file_path)
-            except Exception as e:
-                print(f"Faylni o'chirishda xatolik {file_path}: {e}")
+        for f in os.listdir(downloads_dir):
+            path = os.path.join(downloads_dir, f)
+            if os.path.isfile(path): os.unlink(path)
+            elif os.path.isdir(path): shutil.rmtree(path)
     except Exception as e:
-        print(f"Downloads papkasini tozalashda xatolik: {e}")
+        print(f"Tozalash xatosi: {e}")
 
-async def progress_hook(d, chat_id, message_id, bot):
+# === Instagram: Public postni JSON orqali olish (LOGINsiz) ===
+def get_instagram_media_json(shortcode):
+    url = f"https://www.instagram.com/p/{shortcode}/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Referer": "https://www.instagram.com/",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }
+
     try:
-        if isinstance(d, dict) and d.get('status') == 'downloading':
-            percent = d.get('_percent_str', '0%')
-            speed = d.get('_speed_str', 'N/A')
-            eta = d.get('_eta_str', 'N/A')
-            
-            progress_text = f"⬇️ Yuklanmoqda... {percent}\n⚡ {speed} | ⏳ {eta}"
-            
-            await bot.edit_message_text(
-                progress_text,
-                chat_id=chat_id,
-                message_id=message_id
-            )
-    except Exception as e:
-        print(f"Progress xatosi: {e}")
+        response = requests.get(url, headers=headers, timeout=30)
+        if response.status_code != 200:
+            return None
 
+        soup = BeautifulSoup(response.text, 'html.parser')
+        script = soup.find("script", text=re.compile("window\._sharedData"))
+        if not script:
+            return None
+
+        json_text = re.search(r"window\._sharedData = (\{.+?\});", script.string)
+        if not json_text:
+            return None
+
+        data = json.loads(json_text.group(1))
+        media = data["entry_data"]["PostPage"][0]["graphql"]["shortcode_media"]
+
+        return media
+    except Exception as e:
+        print(f"Instagram JSON olish xatosi: {e}")
+        return None
+
+# === Instagram media yuklash (LOGINsiz) ===
+async def download_instagram_media(shortcode):
+    await clean_downloads_folder()
+    media_files = []
+
+    try:
+        media = get_instagram_media_json(shortcode)
+        if not media:
+            return []
+
+        is_video = media.get("is_video", False)
+        video_url = media.get("video_url")
+        display_url = media.get("display_url")
+
+        # Single post
+        if is_video and video_url:
+            fn = os.path.join(downloads_dir, "ig_video.mp4")
+            with requests.get(video_url, stream=True, timeout=60) as r:
+                with open(fn, 'wb') as f:
+                    for chunk in r.iter_content(1024*1024):
+                        f.write(chunk)
+            if os.path.getsize(fn) <= MAX_FILE_SIZE:
+                media_files.append(('video', fn))
+            else:
+                os.remove(fn)
+
+        elif display_url:
+            fn = os.path.join(downloads_dir, "ig_image.jpg")
+            with open(fn, 'wb') as f:
+                f.write(requests.get(display_url, timeout=60).content)
+            if os.path.getsize(fn) <= MAX_FILE_SIZE:
+                media_files.append(('image', fn))
+            else:
+                os.remove(fn)
+
+        # Carousel (Sidecar)
+        if media.get("edge_sidecar_to_children"):
+            nodes = media["edge_sidecar_to_children"]["edges"]
+            for i, node in enumerate(nodes[:10]):
+                node = node["node"]
+                if node["is_video"]:
+                    url = node["video_url"]
+                    fn = os.path.join(downloads_dir, f"ig_video_{i}.mp4")
+                else:
+                    url = node["display_url"]
+                    fn = os.path.join(downloads_dir, f"ig_image_{i}.jpg")
+
+                with requests.get(url, stream=True, timeout=60) as r:
+                    with open(fn, 'wb') as f:
+                        for chunk in r.iter_content(1024*1024):
+                            f.write(chunk)
+
+                if os.path.getsize(fn) <= MAX_FILE_SIZE:
+                    media_files.append(('video' if node["is_video"] else 'image', fn))
+                else:
+                    os.remove(fn)
+
+    except Exception as e:
+        print(f"Instagram yuklash xatosi: {e}")
+
+    return media_files
+
+# === YouTube formatlari ===
 def get_available_formats(info):
     formats = {'video': {}, 'audio': {}}
-    
     for f in info.get('formats', []):
-        if not isinstance(f, dict):
-            continue
-            
-        # Video formatlari (faqat 50MB dan kichik va filesize mavjud bo'lganlar)
+        if not isinstance(f, dict): continue
         if f.get('vcodec') != 'none' and f.get('ext') == 'mp4':
-            height = f.get('height')
-            filesize = f.get('filesize', 0)
-            # Faqat filesize mavjud va 50MB dan kichik bo'lgan formatlar
-            if height and filesize and filesize <= MAX_FILE_SIZE:
-                height_str = str(height)
-                if height_str not in formats['video'] or filesize > formats['video'][height_str].get('filesize', 0):
-                    formats['video'][height_str] = {
-                        'format_id': f['format_id'],
-                        'filesize': filesize,
-                        'url': f.get('url')
-                    }
-        
-        # Audio formatlari (faqat 50MB dan kichik va filesize mavjud bo'lganlar)
+            h = f.get('height')
+            size = f.get('filesize', 0)
+            if h and size and size <= MAX_FILE_SIZE:
+                hs = str(h)
+                if hs not in formats['video'] or size < formats['video'][hs].get('filesize', float('inf')):
+                    formats['video'][hs] = {'format_id': f['format_id'], 'filesize': size}
         elif f.get('acodec') != 'none' and f.get('vcodec') == 'none':
             ext = f.get('ext')
-            filesize = f.get('filesize', 0)
-            if ext in ['m4a', 'mp3'] and filesize and filesize <= MAX_FILE_SIZE:
+            size = f.get('filesize', 0)
+            if ext in ['m4a', 'mp3'] and size and size <= MAX_FILE_SIZE:
                 if ext not in formats['audio'] or (f.get('abr', 0) > formats['audio'][ext].get('abr', 0)):
-                    formats['audio'][ext] = {
-                        'format_id': f['format_id'],
-                        'filesize': filesize,
-                        'url': f.get('url')
-                    }
-                    
+                    formats['audio'][ext] = {'format_id': f['format_id'], 'filesize': size}
     return formats
 
+# === Format tugmalari ===
 async def send_format_buttons(chat_id, info, bot):
     formats = user_data[chat_id]["formats"]
     buttons = []
-    
-    # Video formatlari uchun tugmalar (faqat filesize mavjud va 50MB dan kichiklar)
-    for height, f in sorted(formats['video'].items(), key=lambda x: int(x[0])):
-        size = f.get('filesize', 0) / (1024 * 1024)
+    for h, f in sorted(formats['video'].items(), key=lambda x: int(x[0])):
+        size_mb = f['filesize'] / (1024 * 1024)
         buttons.append(InlineKeyboardButton(
-            f"{FORMAT_EMOJIS.get(height, '🎬')} {height}p | {size:.1f}MB",
+            f"{FORMAT_EMOJIS.get(h, 'Film')} {h}p | {size_mb:.1f}MB",
             callback_data=f"video_{f['format_id']}"
         ))
-    
-    # Audio formatlari uchun tugmalar (faqat filesize mavjud va 50MB dan kichiklar)
     for ext, f in formats['audio'].items():
-        size = f.get('filesize', 0) / (1024 * 1024)
+        size_mb = f['filesize'] / (1024 * 1024)
         buttons.append(InlineKeyboardButton(
-            f"{FORMAT_EMOJIS.get(ext, '🎵')} {ext.upper()} | {size:.1f}MB",
+            f"{FORMAT_EMOJIS.get(ext, 'Music')} {ext.upper()} | {size_mb:.1f}MB",
             callback_data=f"audio_{f['format_id']}"
         ))
-    
     if not buttons:
-        await bot.send_message(chat_id, "❌ Ushbu videoda yuklab olinadigan formatlar topilmadi (faqat 50MB dan kichik va hajmi ma'lum formatlar ko'rsatiladi).")
+        await bot.send_message(chat_id, "30MB dan kichik format topilmadi.")
         return
-    
-    # Tugmalarni qatorlarga ajratish (har bir qatorda 2 ta tugma)
-    keyboard = []
-    for i in range(0, len(buttons), 2):
-        row = buttons[i:i+2]
-        keyboard.append(row)
-    
+    keyboard = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
     markup = InlineKeyboardMarkup(keyboard)
-    
-    caption = f"🎬 <b>{info.get('title', 'Video')}</b>\n\nQuyidagi formatlardan birini tanlang (faqat 50MB dan kichik va hajmi ma'lum formatlar ko'rsatiladi):"
-    
+    caption = f"<b>{info.get('title', 'Video')}</b>\n\nFormatni tanlang:"
+    thumbnail = info.get('thumbnail')
     try:
-        # Video rasmini yoki standart xabar yuborish
-        thumbnail = info.get('thumbnail')
-        if thumbnail:
-            msg = await bot.send_photo(
-                chat_id, thumbnail,
-                caption=caption,
-                parse_mode='HTML',
-                reply_markup=markup
-            )
-        else:
-            msg = await bot.send_message(
-                chat_id, caption,
-                parse_mode='HTML',
-                reply_markup=markup
-            )
-            
+        msg = await bot.send_photo(chat_id, thumbnail, caption=caption, parse_mode='HTML', reply_markup=markup) if thumbnail else \
+               await bot.send_message(chat_id, caption, parse_mode='HTML', reply_markup=markup)
         user_data[chat_id]["format_message_id"] = msg.message_id
-        
     except Exception as e:
-        await bot.send_message(chat_id, f"❌ Xatolik: {str(e)}")
+        await bot.send_message(chat_id, f"Xatolik: {e}")
 
-async def download_media(chat_id, format_id, is_video=True, bot=None):
+# === Yuklash progressi ===
+async def progress_hook(d, chat_id, msg_id, bot):
+    if d.get('status') == 'downloading':
+        try:
+            text = f"Yuklanmoqda... {d.get('_percent_str', '0%')}\n{d.get('_speed_str', 'N/A')} | {d.get('_eta_str', 'N/A')}"
+            await bot.edit_message_text(text, chat_id, msg_id)
+        except: pass
+
+# === Media yuklash ===
+async def download_media(chat_id, format_id, is_video, bot):
+    await clean_downloads_folder()
     try:
-        # Avval downloads papkasini tozalaymiz
-        await clean_downloads_folder()
-        
         result = await asyncio.wait_for(_download_media(chat_id, format_id, is_video, bot), timeout=DOWNLOAD_TIMEOUT)
         return result
     except asyncio.TimeoutError:
-        await bot.send_message(chat_id, "❌ Yuklash juda uzoq davom etdi. Iltimos, qayta urinib ko'ring.")
-        return None
+        await bot.send_message(chat_id, "Yuklash vaqti tugadi.")
     except Exception as e:
-        await bot.send_message(chat_id, f"❌ Yuklashda xatolik: {str(e)}")
-        return None
+        await bot.send_message(chat_id, f"Yuklash xatosi: {e}")
+    return None
 
 async def _download_media(chat_id, format_id, is_video, bot):
     url = user_data[chat_id]["url"]
     ext = "mp4" if is_video else "mp3"
-    
-    # Unique fayl nomi yaratish
-    timestamp = int(time.time())
-    filename = os.path.join(downloads_dir, f"{chat_id}_{timestamp}.{ext}")
-    
-    loading_msg = await bot.send_message(chat_id, "⏳ Yuklanmoqda, iltimos kuting...")
-    
+    filename = os.path.join(downloads_dir, f"{chat_id}_{int(time.time())}.{ext}")
+    msg = await bot.send_message(chat_id, "Yuklanmoqda...")
+    await bot.send_chat_action(chat_id, 'upload_video' if is_video else 'upload_audio')
+
+    ydl_opts = {
+        'format': f'{format_id}+bestaudio/best' if is_video else 'bestaudio/best',
+        'outtmpl': filename,
+        'quiet': True,
+        'merge_output_format': 'mp4',
+        'socket_timeout': 120,
+        'retries': 10,
+        'noprogress': False,
+    }
+    if is_video:
+        ydl_opts['postprocessors'] = [{'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'}]
+    else:
+        ydl_opts['postprocessors'] = [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'mp3', 'preferredquality': '192'}]
+
+    def progress(d):
+        if d['status'] == 'downloading':
+            asyncio.create_task(progress_hook(d, chat_id, msg.message_id, bot))
+    ydl_opts['progress_hooks'] = [progress]
+
     try:
-        await bot.send_chat_action(chat_id, 'upload_video' if is_video else 'upload_audio')
-        
-        ydl_opts = {
-            'format': f'{format_id}+bestaudio/best' if is_video else 'bestaudio/best',
-            'outtmpl': filename,
-            'quiet': True,
-            'merge_output_format': 'mp4',
-            'socket_timeout': 120,
-            'retries': 10,
-            'fragment_retries': 10,
-            'extractor_retries': 3,
-            'noprogress': False,
-            'postprocessors': [],
-            'extractaudio': not is_video,
-            'keepvideo': is_video,
-        }
-
-        if is_video:
-            ydl_opts['postprocessors'].append({
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',
-            })
-        else:
-            ydl_opts['postprocessors'].append({
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            })
-
-        progress_messages = {'message_id': loading_msg.message_id}
-
-        def progress_callback(d):
-            if d['status'] == 'downloading':
-                asyncio.create_task(progress_hook(d, chat_id, progress_messages['message_id'], bot))
-        
-        ydl_opts['progress_hooks'] = [progress_callback]
-        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
-        
-        # Audio fayllar uchun qo'shimcha tekshirish
-        if not is_video:
-            # Agar .mp3.mp3 yaratilgan bo'lsa, uni to'g'irlaymiz
-            double_ext = f"{filename}.mp3"
-            if os.path.exists(double_ext):
-                os.rename(double_ext, filename)
-        
+        if not is_video and os.path.exists(f"{filename}.mp3"):
+            os.rename(f"{filename}.mp3", filename)
         if not os.path.exists(filename):
-            raise Exception("Fayl yaratilmadi yoki yo'qolgan")
-            
-        file_size = os.path.getsize(filename)
-        if file_size > MAX_FILE_SIZE:
+            raise Exception("Fayl yaratilmadi")
+        if os.path.getsize(filename) > MAX_FILE_SIZE:
             os.remove(filename)
-            raise Exception("Fayl hajmi 50MB dan katta")
-        
-        return filename, progress_messages['message_id']
-    
+            raise Exception("Fayl 30MB dan katta")
+        return filename, msg.message_id
     except Exception as e:
-        await bot.edit_message_text(
-            f"❌ Yuklashda xatolik: {str(e)}",
-            chat_id=chat_id,
-            message_id=loading_msg.message_id
-        )
-        # Har qanday fayllarni o'chiramiz
+        await bot.edit_message_text(f"Yuklash xatosi: {e}", chat_id, msg.message_id)
         for f in [filename, f"{filename}.mp3"]:
-            if os.path.exists(f):
-                os.remove(f)
+            if os.path.exists(f): os.remove(f)
         return None
 
-# Instagram related functions
-async def download_instagram_media(shortcode):
-    L = instaloader.Instaloader()
-    post = instaloader.Post.from_shortcode(L.context, shortcode)
-    
-    media_files = []
-    
-    if post.typename == 'GraphSidecar':
-        for index, node in enumerate(post.get_sidecar_nodes()):
-            if index >= 10:
-                break
-            if node.is_video:
-                filename = os.path.join(downloads_dir, f"video_{index}.mp4")
-                with requests.get(node.video_url, stream=True, timeout=60) as r:
-                    with open(filename, 'wb') as f:
-                        for chunk in r.iter_content(chunk_size=1024*1024):
-                            if chunk:
-                                f.write(chunk)
-                # Fayl hajmini tekshiramiz
-                if os.path.exists(filename) and os.path.getsize(filename) <= MAX_FILE_SIZE:
-                    media_files.append(('video', filename))
-                else:
-                    if os.path.exists(filename):
-                        os.remove(filename)
-            else:
-                filename = os.path.join(downloads_dir, f"image_{index}.jpg")
-                with open(filename, 'wb') as f:
-                    f.write(requests.get(node.display_url, timeout=60).content)
-                # Fayl hajmini tekshiramiz
-                if os.path.exists(filename) and os.path.getsize(filename) <= MAX_FILE_SIZE:
-                    media_files.append(('image', filename))
-                else:
-                    if os.path.exists(filename):
-                        os.remove(filename)
-    
-    elif post.typename == 'GraphVideo':
-        filename = os.path.join(downloads_dir, "video.mp4")
-        with requests.get(post.video_url, stream=True, timeout=60) as r:
-            with open(filename, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=1024*1024):
-                    if chunk:
-                        f.write(chunk)
-        # Fayl hajmini tekshiramiz
-        if os.path.exists(filename) and os.path.getsize(filename) <= MAX_FILE_SIZE:
-            media_files.append(('video', filename))
-        else:
-            if os.path.exists(filename):
-                os.remove(filename)
-    
-    elif post.typename == 'GraphImage':
-        filename = os.path.join(downloads_dir, "image.jpg")
-        with open(filename, 'wb') as f:
-            f.write(requests.get(post.url, timeout=60).content)
-        # Fayl hajmini tekshiramiz
-        if os.path.exists(filename) and os.path.getsize(filename) <= MAX_FILE_SIZE:
-            media_files.append(('image', filename))
-        else:
-            if os.path.exists(filename):
-                os.remove(filename)
-    
-    return media_files
-
-# Bot handlers
-async def start(update: Update, context: CallbackContext) -> None:
+# === Handlers ===
+async def start(update: Update, context: CallbackContext):
     await update.message.reply_text(
-        "📸 *Media Yuklovchi Bot* 📹\n\n"
-        "YouTube yoki Instagramdagi videolar va rasmlarni yuklab olish uchun linkini yuboring.\n"
-        "⚠️ Eslatma: Faqat 50MB dan kichik fayllar yuklanadi.\n\n"
-        "🌐 *Namunalar:*\n"
-        "YouTube: `https://www.youtube.com/watch?v=dQw4w9WgXcQ`\n"
-        "Instagram: `https://www.instagram.com/p/Cz6ZQKjN3qP/`\n\n"
-        "Bot sizga media fayllarni yuklab beradi.",
+        "*Media Yuklovchi Bot*\n\n"
+        "YouTube yoki Instagram linkini yuboring.\n"
+        "30MB gacha fayllar yuklanadi.\n\n"
+        "*Misollar:*\n"
+        "`https://youtu.be/dQw4w9WgXcQ`\n"
+        "`https://instagram.com/p/ABC123/`",
         parse_mode='Markdown'
     )
 
-async def handle_youtube_link(update: Update, context: CallbackContext):
+async def handle_youtube(update: Update, context: CallbackContext):
     chat_id = update.message.chat.id
     url = update.message.text.strip()
-    
-    if not url.startswith(('http://', 'https://')):
-        url = 'https://' + url
-    
+    if not url.startswith(('http://', 'https://')): url = 'https://' + url
+    await clean_downloads_folder()
+    msg = await context.bot.send_message(chat_id, "Video ma'lumotlari olinmoqda...")
     try:
-        # Avval downloads papkasini tozalaymiz
-        await clean_downloads_folder()
-        
-        loading_msg = await context.bot.send_message(chat_id, "🔍 Video ma'lumotlari olinmoqda...")
-        
-        ydl_opts = {
-            'quiet': True,
-            'extract_flat': False,
-            'force_generic_extractor': True,
-            'socket_timeout': 60,
-            'retries': 5
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
             info = ydl.extract_info(url, download=False)
-            if not info:
-                raise Exception("Video ma'lumotlari olinmadi")
-            
-            user_data[chat_id] = {
-                "url": url,
-                "info": info,
-                "formats": get_available_formats(info)
-            }
-            
-            await loading_msg.delete()
-            await send_format_buttons(chat_id, info, context.bot)
-            
+        user_data[chat_id] = {"url": url, "info": info, "formats": get_available_formats(info)}
+        await msg.delete()
+        await send_format_buttons(chat_id, info, context.bot)
     except Exception as e:
-        error_msg = f"❌ Xatolik: {str(e)}"
-        await context.bot.send_message(chat_id, error_msg)
+        await context.bot.send_message(chat_id, f"Xatolik: {e}")
 
-async def handle_instagram_link(update: Update, context: CallbackContext):
+async def handle_instagram(update: Update, context: CallbackContext):
+    url = update.message.text.strip()
     try:
-        # Avval downloads papkasini tozalaymiz
-        await clean_downloads_folder()
-        
-        loading_msg = await update.message.reply_text("⏳ Media yuklanmoqda...")
-        
-        shortcode = update.message.text.split('/')[-2]
-        media_files = await download_instagram_media(shortcode)
-        
-        if not media_files:
-            await loading_msg.edit_text("❌ Ushbu postda media topilmadi yoki fayl hajmi 50MB dan katta.")
+        shortcode = re.search(r'instagram\.com/(?:p|reel)/([A-Za-z0-9_-]+)', url)
+        if not shortcode:
+            await update.message.reply_text("Noto'g'ri Instagram link.")
             return
-        
-        await loading_msg.delete()
-        
-        caption = "🎬 Yuklab olindi: @dilxush_bahodirov"
-        
+        shortcode = shortcode.group(1)
+
+        await clean_downloads_folder()
+        msg = await update.message.reply_text("Instagram media yuklanmoqda...")
+
+        media_files = await download_instagram_media(shortcode)
+        await msg.delete()
+
+        if not media_files:
+            await update.message.reply_text("Media topilmadi yoki hajmi katta.")
+            return
+
+        caption = "Yuklab olindi: @dilxush_bahodirov"
+
         if len(media_files) == 1:
-            media_type, filename = media_files[0]
-            if media_type == 'video':
-                await update.message.reply_video(video=open(filename, 'rb'), caption=caption)
+            typ, path = media_files[0]
+            if typ == 'video':
+                await update.message.reply_video(open(path, 'rb'), caption=caption)
             else:
-                await update.message.reply_photo(photo=open(filename, 'rb'), caption=caption)
-            
-            # Faylni o'chiramiz
-            try:
-                os.remove(filename)
-            except:
-                pass
+                await update.message.reply_photo(open(path, 'rb'), caption=caption)
+            os.remove(path)
         else:
-            media_group = []
-            for i, (media_type, filename) in enumerate(media_files):
-                if media_type == 'video':
+            group = []
+            for i, (typ, path) in enumerate(media_files):
+                if typ == 'video':
                     if i == 0:
-                        await update.message.reply_video(video=open(filename, 'rb'), caption=caption)
+                        await update.message.reply_video(open(path, 'rb'), caption=caption)
                     else:
-                        media_group.append(InputMediaVideo(media=open(filename, 'rb'), 
-                                                     caption=caption if i == len(media_files)-1 else None))
+                        group.append(InputMediaVideo(open(path, 'rb'), caption=caption if i == len(media_files)-1 else None))
                 else:
-                    media_group.append(InputMediaPhoto(media=open(filename, 'rb'), 
-                                                caption=caption if i == len(media_files)-1 else None))
-                
-                # Faylni o'chiramiz
-                try:
-                    os.remove(filename)
-                except:
-                    pass
-            
-            if media_group:
-                await update.message.reply_media_group(media=media_group)
-            
+                    group.append(InputMediaPhoto(open(path, 'rb'), caption=caption if i == len(media_files)-1 else None))
+                os.remove(path)
+            if group:
+                await update.message.reply_media_group(group)
+
     except Exception as e:
-        error_msg = await update.message.reply_text(f"❌ Xatolik yuz berdi: {str(e)}")
-        await asyncio.sleep(10)
-        await error_msg.delete()
+        await update.message.reply_text(f"Xatolik: {e}")
 
-async def handle_message(update: Update, context: CallbackContext) -> None:
+async def handle_message(update: Update, context: CallbackContext):
     text = update.message.text or ''
-    
     if 'youtube.com' in text or 'youtu.be' in text:
-        await handle_youtube_link(update, context)
+        await handle_youtube(update, context)
     elif 'instagram.com' in text:
-        await handle_instagram_link(update, context)
+        await handle_instagram(update, context)
     else:
-        await update.message.reply_text("❌ Iltimos, YouTube yoki Instagram linkini yuboring.")
+        await update.message.reply_text("YouTube yoki Instagram linkini yuboring.")
 
-async def handle_callback(update: Update, context: CallbackContext) -> None:
+async def handle_callback(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
-    
     chat_id = query.message.chat.id
     data = query.data
-    
     if chat_id not in user_data:
-        await query.edit_message_text("❌ Session muddati tugadi. Iltimos, linkni qayta yuboring.")
+        await query.edit_message_text("Sessiya tugadi.")
         return
-    
     try:
         if "format_message_id" in user_data[chat_id]:
-            try:
-                await context.bot.delete_message(chat_id, user_data[chat_id]["format_message_id"])
-            except:
-                pass
-        
+            await context.bot.delete_message(chat_id, user_data[chat_id]["format_message_id"])
         is_video = data.startswith("video_")
-        format_id = data[6:]
-        
+        format_id = data.split("_", 1)[1]
         result = await download_media(chat_id, format_id, is_video, context.bot)
-        if not result:
-            return
-            
-        file_path, progress_msg_id = result
-        
-        caption = f"🎬 {user_data[chat_id]['info'].get('title', 'Video')}\n🔗 @dilxush_bahodirov"
-        
-        try:
-            if is_video:
-                with open(file_path, 'rb') as video_file:
-                    await context.bot.send_video(
-                        chat_id, video_file,
-                        caption=caption,
-                        parse_mode='HTML'
-                    )
-            else:
-                with open(file_path, 'rb') as audio_file:
-                    await context.bot.send_audio(
-                        chat_id, audio_file,
-                        caption=caption,
-                        parse_mode='HTML',
-                        title=user_data[chat_id]['info'].get('title', 'Audio'),
-                        performer="YouTube"
-                    )
-        except Exception as e:
-            await context.bot.send_message(chat_id, f"❌ Media yuborishda xatolik: {str(e)}")
-            raise
-        
-        # Progress xabarini o'chiramiz
-        try:
-            await context.bot.delete_message(chat_id, progress_msg_id)
-        except:
-            pass
-        
-        # Faylni o'chiramiz
-        try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-        except:
-            pass
-            
-        # Downloads papkasini tozalaymiz
+        if not result: return
+        file_path, msg_id = result
+        title = user_data[chat_id]['info'].get('title', 'Media')
+        caption = f"{title}\n@dilxush_bahodirov"
+        if is_video:
+            await context.bot.send_video(chat_id, open(file_path, 'rb'), caption=caption, parse_mode='HTML')
+        else:
+            await context.bot.send_audio(chat_id, open(file_path, 'rb'), title=title, performer="YouTube", caption=caption, parse_mode='HTML')
+        await context.bot.delete_message(chat_id, msg_id)
+        os.remove(file_path)
         await clean_downloads_folder()
-            
     except Exception as e:
-        error_msg = f"❌ Yuklashda xatolik: {str(e)}"
-        await context.bot.send_message(chat_id, error_msg)
+        await context.bot.send_message(chat_id, f"Xatolik: {e}")
 
+# === Main ===
 def main():
-    TOKEN = "7847208260:AAG4XeEcE1RLixadm3YZGKvC2fqv4_NvFuc"
     PORT = int(os.environ.get("PORT", 8443))
     APP_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://instasave-1-cbdc.onrender.com")
-
-    application = Application.builder().token(TOKEN).read_timeout(100).write_timeout(100).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(CallbackQueryHandler(handle_callback))
-
-    print("✅ Bot server ishga tushdi...")
-
-    # Render uchun webhook usuli
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=TOKEN,
-        webhook_url=f"{APP_URL}/{TOKEN}"
-    )
+    app = Application.builder().token(TOKEN).read_timeout(100).write_timeout(100).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CallbackQueryHandler(handle_callback))
+    print("Bot ishga tushdi...")
+    app.run_webhook(listen="0.0.0.0", port=PORT, url_path=TOKEN, webhook_url=f"{APP_URL}/{TOKEN}")
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
